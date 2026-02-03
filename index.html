@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skyline Sprint - Endless Runner</title>
+  <style>
+    /* Basic page setup */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      display: grid;
+      place-items: center;
+    }
+
+    /* Game container keeps the canvas and overlay aligned */
+    .game-wrapper {
+      position: relative;
+      width: min(900px, 95vw);
+      aspect-ratio: 16 / 9;
+      background: #0b1220;
+      border: 2px solid #1e293b;
+      border-radius: 16px;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.45);
+      overflow: hidden;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+    }
+
+    /* Overlay for game over state */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.75);
+      gap: 12px;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .overlay h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      color: #f8fafc;
+    }
+
+    .overlay p {
+      margin: 0;
+      font-size: 1rem;
+      color: #cbd5f5;
+    }
+
+    .overlay button {
+      padding: 10px 22px;
+      font-size: 1rem;
+      border-radius: 999px;
+      border: none;
+      background: #38bdf8;
+      color: #0f172a;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+
+    .overlay button:hover {
+      transform: translateY(-2px);
+      background: #0ea5e9;
+    }
+
+    /* Score badge */
+    .hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(15, 23, 42, 0.65);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .controls {
+      position: absolute;
+      right: 12px;
+      top: 12px;
+      font-size: 0.85rem;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-wrapper">
+    <canvas id="gameCanvas" width="900" height="506"></canvas>
+    <div class="hud" id="scoreHud">Score: 0</div>
+    <div class="controls">Move: A/D or ◀︎/▶︎ · Jump: W/↑/Space</div>
+    <div class="overlay" id="gameOverOverlay">
+      <h1>Game Over</h1>
+      <p id="finalScore">Score: 0</p>
+      <button id="restartButton">Restart</button>
+    </div>
+  </div>
+
+  <script>
+    // Grab references to DOM elements
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const scoreHud = document.getElementById("scoreHud");
+    const gameOverOverlay = document.getElementById("gameOverOverlay");
+    const finalScore = document.getElementById("finalScore");
+    const restartButton = document.getElementById("restartButton");
+
+    // Game constants
+    const groundY = canvas.height * 0.78;
+    const gravity = 2200; // pixels per second^2
+    const jumpStrength = 820; // jump velocity
+    const maxHorizontalSpeed = 360;
+
+    // Game state variables
+    let player;
+    let obstacles;
+    let lastTime = 0;
+    let score = 0;
+    let isGameOver = false;
+    let spawnTimer = 0;
+    let spawnInterval = 1.5; // seconds
+    let obstacleSpeed = 320;
+
+    // Track keyboard input
+    const keys = new Set();
+
+    // Create the player object
+    function createPlayer() {
+      return {
+        x: canvas.width * 0.15,
+        y: groundY,
+        width: 40,
+        height: 60,
+        velocityY: 0,
+        velocityX: 0,
+        onGround: true
+      };
+    }
+
+    // Create a single obstacle
+    function createObstacle() {
+      const height = 40 + Math.random() * 40;
+      return {
+        x: canvas.width + 50,
+        y: groundY - height,
+        width: 24 + Math.random() * 30,
+        height,
+        color: Math.random() > 0.5 ? "#f97316" : "#fb7185"
+      };
+    }
+
+    // Reset game to initial state
+    function resetGame() {
+      player = createPlayer();
+      obstacles = [];
+      lastTime = performance.now();
+      score = 0;
+      isGameOver = false;
+      spawnTimer = 0;
+      spawnInterval = 1.5;
+      obstacleSpeed = 320;
+      gameOverOverlay.classList.remove("show");
+    }
+
+    // Handle jumping logic
+    function tryJump() {
+      if (player.onGround) {
+        player.velocityY = -jumpStrength;
+        player.onGround = false;
+      }
+    }
+
+    // Listen for keyboard input
+    window.addEventListener("keydown", (event) => {
+      keys.add(event.key.toLowerCase());
+      if ([" ", "arrowup", "w"].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        tryJump();
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      keys.delete(event.key.toLowerCase());
+    });
+
+    restartButton.addEventListener("click", () => {
+      resetGame();
+      requestAnimationFrame(gameLoop);
+    });
+
+    // Update player position and physics
+    function updatePlayer(delta) {
+      // Horizontal movement
+      if (keys.has("a") || keys.has("arrowleft")) {
+        player.velocityX = -maxHorizontalSpeed;
+      } else if (keys.has("d") || keys.has("arrowright")) {
+        player.velocityX = maxHorizontalSpeed;
+      } else {
+        player.velocityX = 0;
+      }
+
+      player.x += player.velocityX * delta;
+      player.x = Math.max(40, Math.min(player.x, canvas.width * 0.4));
+
+      // Apply gravity
+      player.velocityY += gravity * delta;
+      player.y += player.velocityY * delta;
+
+      // Ground collision
+      if (player.y >= groundY) {
+        player.y = groundY;
+        player.velocityY = 0;
+        player.onGround = true;
+      }
+    }
+
+    // Update obstacles and check collisions
+    function updateObstacles(delta) {
+      obstacles.forEach((obstacle) => {
+        obstacle.x -= obstacleSpeed * delta;
+      });
+
+      // Remove obstacles that have moved off screen
+      obstacles = obstacles.filter((obstacle) => obstacle.x + obstacle.width > -20);
+
+      // Collision detection
+      obstacles.forEach((obstacle) => {
+        const hit =
+          player.x < obstacle.x + obstacle.width &&
+          player.x + player.width > obstacle.x &&
+          player.y < obstacle.y + obstacle.height &&
+          player.y + player.height > obstacle.y;
+
+        if (hit) {
+          endGame();
+        }
+      });
+    }
+
+    // Spawn obstacles over time
+    function updateSpawner(delta) {
+      spawnTimer += delta;
+      if (spawnTimer >= spawnInterval) {
+        spawnTimer = 0;
+        obstacles.push(createObstacle());
+
+        // Increase difficulty gradually
+        obstacleSpeed += 10;
+        spawnInterval = Math.max(0.7, spawnInterval - 0.03);
+      }
+    }
+
+    // Draw background, player, obstacles, and ground
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw distant skyline
+      ctx.fillStyle = "#1e293b";
+      for (let i = 0; i < 10; i += 1) {
+        const width = 60 + i * 6;
+        const height = 100 + i * 8;
+        ctx.fillRect(i * 90 - 40, groundY - height, width, height);
+      }
+
+      // Draw ground
+      ctx.fillStyle = "#0f766e";
+      ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
+
+      // Draw player
+      ctx.fillStyle = "#38bdf8";
+      ctx.fillRect(player.x, player.y - player.height, player.width, player.height);
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(player.x + 8, player.y - player.height + 12, 8, 8);
+
+      // Draw obstacles
+      obstacles.forEach((obstacle) => {
+        ctx.fillStyle = obstacle.color;
+        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+      });
+    }
+
+    // End the game and show overlay
+    function endGame() {
+      isGameOver = true;
+      gameOverOverlay.classList.add("show");
+      finalScore.textContent = `Score: ${Math.floor(score)}`;
+    }
+
+    // Main game loop
+    function gameLoop(timestamp) {
+      if (isGameOver) {
+        return;
+      }
+
+      const delta = (timestamp - lastTime) / 1000;
+      lastTime = timestamp;
+
+      updatePlayer(delta);
+      updateSpawner(delta);
+      updateObstacles(delta);
+
+      score += delta * 10;
+      scoreHud.textContent = `Score: ${Math.floor(score)}`;
+
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Start the game
+    resetGame();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
